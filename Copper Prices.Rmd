@@ -1,0 +1,61 @@
+---
+title: "Time Series Analysis of Copper Prices"
+author: "Daniel Hopp"
+date: "4 January 2019"
+output:
+  html_document:
+    code_folding: hide
+---
+
+## Exposition of the Problem
+
+The goal of this analysis is to get a better sense of how copper prices behave, with the ultimate goal of being able to identify, with a reasonable degree of certainty, if a day's price is the lowest that can be expected over a 4 week period.  Of course the price of copper is dependent on many different factors, including prices/indicators of other commodities, inventory levels, regulatory announcements, geopolitical conditions in source countries, and indicators of downstream industries.  However for simplicity and ease of use/interpretation, this analysis will stick with only copper's past prices as indicators of its future direction.
+
+### Data
+
+Historical data on copper prices was obtained from: https://www.macrotrends.net/1476/copper-prices-historical-chart-data, which has daily copper prices (USD/pound) starting from 2 July 1959. The source makes no mention of inflation, but we will assume prices are in constant dollars. A simple plot of the raw data will give us an initial idea of how copper prices have developed over time. Recessions are also shaded to give an indication of copper prices' relation to overall economic performance.
+
+```{r eval = T}
+library(ggplot2)
+data <- read.csv('hist copper.csv')
+
+#converting date to datetime data type
+data$date <- as.Date(data$date)
+
+#data on recessions for plot
+recessions.df = read.table(textConnection(
+"Peak, Trough
+1960-04-01, 1961-02-01
+1969-12-01, 1970-11-01
+1973-11-01, 1975-03-01
+1980-01-01, 1980-07-01
+1981-07-01, 1982-11-01
+1990-07-01, 1991-03-01
+2001-03-01, 2001-11-01
+2007-12-01, 2009-06-01"), sep=',',
+colClasses=c('Date', 'Date'), header=TRUE)
+recessions.trim = subset(recessions.df, Peak >= min(data$date))
+
+#function for simple line plot
+line_plot <- function(data, date, value, title, xlab, ylab){
+  plot <- ggplot(data = data, aes(x = date, y = value, group = 1)) + 
+  geom_line() +
+  ggtitle(title) +
+  xlab(xlab) + 
+  ylab(ylab)
+  plot
+}
+
+line_plot(data, date, value, "Daily Copper Prices (USD/Pound)", "Date", "USD/Pound") +
+  geom_rect(data=recessions.trim, aes(xmin=Peak, xmax=Trough, ymin=-Inf, ymax=+Inf), alpha=0.2, inherit.aes = FALSE)
+```
+
+#### Interpretation
+We see that on a macro level, copper prices don't seem to follow any readily discernible pattern, beyond the fact that they go down (maybe with some delay) during recessions, so some quantitative time series analyses will need to be done.  But first, to get a better look at how the prices behave on a smaller time scale, we will look at the plot of the last 6 months.
+
+```{r eval = T}
+line_plot(data[data$date >= "2018-07-01",], date, value, "Daily Copper Prices (USD/Pound)", "Date", "USD/Pound")
+```
+
+#### Interpretation
+On a micro level, the series seems to have a certain degree of mean correction, making a random walk unlikely. However to get a better idea of the time series' nature, quantitative analyses will need to be performed.
