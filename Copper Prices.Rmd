@@ -15,7 +15,7 @@ The goal of this analysis is to get a better sense of how copper prices behave, 
 
 Historical data on copper prices was obtained from: https://www.macrotrends.net/1476/copper-prices-historical-chart-data, which has daily copper prices (USD/pound) starting from 2 July 1959. The source makes no mention of inflation, but we will assume prices are in constant dollars. A simple plot of the raw data will give us an initial idea of how copper prices have developed over time. Recessions are also shaded to give an indication of copper prices' relation to overall economic performance.
 
-```{r eval = T}
+```{r eval = T, message=F, warning=F}
 library(ggplot2)
 library(tseries)
 library(lmtest)
@@ -57,7 +57,7 @@ line_plot(data, date, value, "Daily Copper Prices (USD/Pound)", "Date", "USD/Pou
 #### Interpretation
 We see that on a macro level, copper prices don't seem to follow any readily discernible pattern, beyond the fact that they go down (maybe with some delay) during recessions, so some quantitative time series analyses will need to be done.  But first, to get a better look at how the prices behave on a smaller time scale, we will look at the plot of the last 6 months.
 
-```{r eval = T}
+```{r eval = T, message=F, warning=F}
 line_plot(data[data$date >= "2018-07-01",], date, value, "Daily Copper Prices (USD/Pound)", "Date", "USD/Pound")
 ```
 
@@ -67,7 +67,7 @@ On a micro level, the series seems to have a certain degree of mean correction, 
 ### Copper Prices by Day of Week
 Before estimating a time series model, we will look at the development of copper prices by day of week. The hypothesis is that prices may display a weekly seasonality and thus there is an ideal day of the week to buy. To examine this we'll first look very generally at mean prices by day of week.
 
-```{r eval = T}
+```{r eval = T, message=F, warning=F}
 #get day of week
 data$dow <- weekdays(data$date)
 monday <- data[2,"dow"]
@@ -100,6 +100,7 @@ ggplot(data = bar_data, aes(x = Group.1, y = x)) +
   ggtitle("Average Price per Day of Week, 2010-2018") + 
   xlab("Day of Week") + 
   ylab("Average Price")
+
 ```
 #### Interpretation
 Over the whole data set we see a slight trend of increasing prices during the course of the week, with cheapest prices on Monday (by about only 1 or 2 cents) and most expensive on Monday. To make sure this wasn't a time dependent anomaly, the same graph was produced for only 2010-2018. We see the same trend but weaker. Despite the existance of this trend, the evidence is not strong enough to be able to make a blanket recommendation for simply buying earlier in the week. So we move on to the time series analysis.
@@ -107,7 +108,7 @@ Over the whole data set we see a slight trend of increasing prices during the co
 ### Time Series Model
 We will now transform the data to obtain a stationary series. We already saw from our initial plot that the raw data is not a stationary time series, as there are clear trends. Our initial impression can be verified using an Augmented Dickey-Fuller Test for a unit root, obtaining a p-value of `r round(adf.test(data$value)$p.value, 2)`. This is not a sufficient to reject the null hypothesis of a non-stationary series, so first we will try first differencing to see if we then obtain a stationary process. The result of that transformation has a Dickey-Fuller p-value of `r round(adf.test(diff(data$value))$p.value, 2)`, indicating stationarity and is plotted below.
 
-```{r eval = T}
+```{r eval = T, message=F, warning=F}
 ggplot(data = data, aes(x = date, y = c(0, diff(data$value)))) + 
   geom_line() + 
   ggtitle("First Difference of Copper Prices") + 
@@ -118,25 +119,100 @@ ggplot(data = data, aes(x = date, y = c(0, diff(data$value)))) +
 #### Interpretation
 Any trends are gone, however we see a high degree of heteroskedasticity even without any tests, with variance increasing with time. This tells us we need to log transform the series, then first difference, which is plotted below.
 
-```{r eval = T}
+```{r eval = T, message=F, warning=F}
 ggplot(data = data, aes(x = date, y = c(0, diff(log(data$value))))) + 
   geom_line() + 
   ggtitle("First Difference of Logged Copper Prices") + 
   xlab("Date") + 
   ylab("First Difference of Log Price")
-
-gqtest(diff(log(data$value))~1)$p.value
 ```
 
 #### Interpretation
 To the eye it appears that the series is no longer heteroskedastic, but that can be verified with a test. The Goldfeld-Quandt test for heteroskedasticity obtains a p-value of `r round(gqtest(diff(log(data$value))~1)$p.value, 2)`, which is >.05 and allows us to accept the null hypothesis that variance does not change between segments, and thus our series is homoskedastic. Now we can use R's SARIMA function to estimate a time series model for the data.
 
-```{r eval = T}
+```{r eval = T, message=F, warning=F}
 library(forecast)
 
 #create time series data
 ts <- ts(data = diff(log(data$value)), start = c(1959, 125), end = c(2019, 1), frequency = 250)
 
-#model <- auto.arima(ts, start.p = 1)
-model <- sarima.for(ts, 1, 0, 0, n.ahead = 10)
+model <- auto.arima(ts)
+model
+```
+
+#### Interpretion
+The interpretation of the auto.arima output is as follows: the optimal model, based on both AIC and BIC, is an ARIMA(0,0,0) with a mean of 0, meaning the best prediction of log differences in the time series is simply 0. Transforming back (i.e. taking away the first difference and unlogging) to our original variable (copper prices), translates to a random walk with no drift. That is to say that the best estimate of tomorrow's copper price is simply today's copper price. This corroborates Wets findings in his 2012 paper *(Wets and Rios (2012))*, available here: https://www.math.ucdavis.edu/~rjbw/mypage/Mathematics\_of\_Finance_files/WtsR13.pdf. Their logic was that though economically speaking copper prices should be mean reverting due to supply and demand, in reality supply responds so slowly to prices (due to long-term contracts, the excessive time involved to start up or shut down a copper mine) that on a shorter scale mean reversion is negligable. They have similar findings for the explanation of a lack of drift parameter in the random walk. On long term horizons there is most likely a slight positive drift parameter, but on micro scales it is effectively 0.
+
+### Implications, Below Rolling Mean Analysis
+Unfortunately this tells us that we cannot glean too much information from the series itself, and that instead copper prices are driven more by external factors like market news, etc. However since the ultimate goal is not to predict copper prices, but rather to select the lowest price in a period of four weeks, there is still further analysis that can be done. What follows is an analysis that will evaluate a day's price compared to the mean price of the past x number of days. The idea is to identify abnormally low priced days, with the two parameters being the number of previous days to include in the mean, and the threshold for considering a day likely to be the lowest, or among the lowest, in a 4 week period (e.g. 15% below mean of last 30 days, 20% below mean of last 15 days, etc.). The models will then be evaluated on two metrics, percentage of time they were correct, i.e. they were the lowest in the four week period, and mean square difference from the real lowest. The result of the analysis will be a simple, digestible recommendation in the form of: "If today's copper price is x% below the mean of the past x days, copper should be purchased today to have a high chance of being the lowest in a four week period". Additionally the method will have a digestible justification in the form of: "This method correctly identifies the lowest price in a four week period x% of the time, and when it is wrong it averages x dollars more than the actual lowest price in the period."
+
+```{r eval = T, message = F, warning = F}
+#definition of function for rolling mean model
+rolling_mean <- function(x_days, threshold){
+  
+  #initializing variables for evaluation
+  correct <- 0
+  mean_sq <- 0
+  mean <- 0
+  total <- length(seq(126, nrow(data) - 20, 20))
+  
+  #126 is first monday in 1960, -20 because need four weeks forward data to evaluate, by 20 because going over 4 week periods
+  for(y in seq(126, nrow(data) - 20, 20)){
+    temp <- data$value[y:(y+19)]
+    for(i in 1:length(temp)){
+      value <- temp[i]
+      #y + i - x_days - 2 is how many days back depending on parameter, trailing goes up as i goes up, y + i - 2 is day before the days price
+      last_x_mean <- mean(data$value[(y + i - x_days - 2):(y + i - 2)])
+      
+      #if the value is lower than the threshold take that value and break
+      if(value/last_x_mean-1 <= threshold * -1){
+        final_value <- value
+        break
+      #if the threshold is never reached, simply take the last value in the 4 week period. This is the risk you take to see if you get a lower price
+      }else if(i == length(temp)){
+        final_value <- value
+      }
+    }
+    
+    #binary evaluation
+    if(final_value <= min(temp)){
+      correct <- correct + 1
+    }
+    #mean square evaluation
+    mean_sq <- mean_sq + (value - min(temp))^2
+    #mean evaluation
+    mean <- mean + abs(value - min(temp))
+  }
+  
+  #what the function returns
+  return(
+    list(
+      "x_days" = x_days,
+      "threshold" = threshold,
+      "perc_correct" = correct / total,
+      "mean_sq_error" = mean_sq / total,
+      "mean_error" = mean / total
+    )
+  )
+}
+
+#best parameter search
+days <- seq(10,100)
+threshold <- seq(.01, .5, .01)
+final_result <- data.frame(
+                 days=integer(), 
+                 threshold=double(),
+                 perc_correct=double(),
+                 mean_sq_error=double(),
+                 mean_error=double(),
+                 stringsAsFactors=FALSE) 
+
+for(i in days){
+  for(j in threshold){
+    result <- rolling_mean(i, j)
+    final_result <- rbind(final_result, data.frame("days" = result$x_days, "threshold" = result$threshold, "perc_correct" = result$perc_correct, "mean_sq_error" = result$mean_sq_error, "mean_error" = result$mean_error))
+  }
+  print(i)
+}
+
 ```
